@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Thief Master: Joystick & Volume Fix</title>
+    <style>
+        body { margin: 0; background: #050505; color: white; font-family: 'Courier New', monospace; overflow: hidden; touch-action: none; user-select: none; }
+        #ui { position: absolute; top: 15px; left: 15px; pointer-events: none; z-index: 10; display: flex; flex-direction: column; gap: 8px; }
+        #money { color: #4ecca3; font-size: 32px; font-weight: bold; text-shadow: 2px 2px #000; pointer-events: auto; cursor: pointer; }
+        
+        .volume-box { pointer-events: auto; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 8px; border: 1px solid #444; width: 140px; }
+        #vol-slider { width: 100%; cursor: pointer; }
+        #music-ctrl { pointer-events: auto; background: #333; border: 2px solid #fff; color: white; padding: 5px; cursor: pointer; font-size: 11px; width: 100%; }
+
+        #buy-victim-btn { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); background: #4ecca3; color: #1a1a2e; border: 4px solid #fff; padding: 12px 25px; font-weight: bold; font-size: 18px; z-index: 20; cursor: pointer; }
+        #toggle-menu { position: absolute; top: 15px; right: 15px; background: #e94560; color: white; padding: 12px 20px; z-index: 40; border: 2px solid #fff; font-weight: bold; cursor: pointer; }
+
+        #menu-panel, #admin-panel { position: absolute; right: 0; top: 0; width: 280px; height: 100%; background: #1a1a2e; border-left: 5px solid #e94560; display: none; z-index: 30; flex-direction: column; }
+        #admin-panel { border-left: 5px solid #f1c40f; background: #222; left: 0; right: auto; z-index: 50; }
+        
+        .tabs { display: flex; background: #111; flex-wrap: wrap; }
+        .tab-btn { flex: 1; padding: 10px; border: none; color: #888; background: none; font-size: 10px; font-weight: bold; cursor: pointer; border-bottom: 3px solid transparent; }
+        .tab-btn.active { color: #e94560; border-bottom: 3px solid #e94560; }
+        .content-area { flex: 1; overflow-y: auto; padding: 15px; box-sizing: border-box; }
+        .card { background: #222; padding: 12px; margin-bottom: 10px; border: 2px solid #444; border-radius: 5px; }
+        .btn { background: #4ecca3; border: none; width: 100%; padding: 10px; margin-top: 5px; font-weight: bold; cursor: pointer; color: #1a1a2e; }
+
+        #wheel-container { position: relative; width: 200px; height: 200px; margin: 10px auto; }
+        #wheel-canvas { width: 100%; height: 100%; border-radius: 50%; border: 4px solid #fff; transition: transform 4s cubic-bezier(0.15, 0, 0.15, 1); }
+        #wheel-arrow { position: absolute; top: -10px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 10px solid transparent; border-right: 10px solid transparent; border-top: 20px solid #fff; z-index: 10; }
+        
+        canvas { display: block; }
+        .rainbow-text { animation: rainbow 0.5s linear infinite; font-weight: bold; }
+        @keyframes rainbow { 0% { color: #f00; } 50% { color: #0f0; } 100% { color: #00f; } }
+    </style>
+</head>
+<body onclick="initAudio()">
+
+<div id="ui">
+    <div id="money" onclick="adminClick()">100 $</div>
+    <div style="font-size: 14px; opacity: 0.8;">ДОХОД: +<span id="pps">0</span> $/с</div>
+    <div class="volume-box">
+        <span style="font-size: 10px;">ГРОМКОСТЬ</span><br>
+        <input type="range" id="vol-slider" min="0" max="1" step="0.01" value="0.2">
+        <button id="music-ctrl" onclick="toggleMusic()">МУЗЫКА: ВЫКЛ</button>
+    </div>
+</div>
+
+<div id="admin-panel">
+    <div class="content-area">
+        <h2 style="color:#f1c40f">ADMIN</h2>
+        <input type="number" id="adm-money" style="width:100%; padding:10px; background:#000; color:#fff; border:1px solid #444;" placeholder="Сумма $">
+        <button class="btn" style="background:#f1c40f" onclick="setAdminMoney()">SET $</button>
+        <button class="btn" onclick="createVictim(true)">SPAWN RAINBOW</button>
+        <button class="btn" style="background:#888; margin-top:20px" onclick="document.getElementById('admin-panel').style.display='none'">CLOSE</button>
+    </div>
+</div>
+
+<button id="buy-victim-btn" onclick="buyVictim()">КУПИТЬ ЖЕРТВУ (<span id="victim-cost">100</span> $)</button>
+<button id="toggle-menu" onclick="toggleMenu()">МЕНЮ</button>
+
+<div id="menu-panel">
+    <div class="tabs">
+        <button class="tab-btn active" id="btn-gang" onclick="switchTab('gang')">БАНДА</button>
+        <button class="tab-btn" id="btn-skins" onclick="switchTab('skins')">СКИНЫ</button>
+        <button class="tab-btn" id="btn-wheel" onclick="switchTab('wheel')">УДАЧА</button>
+        <button class="tab-btn" id="btn-chests" onclick="switchTab('chests')">СУНДУКИ</button>
+    </div>
+    <div id="tab-content" class="content-area"></div>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const tabContent = document.getElementById('tab-content');
+const volSlider = document.getElementById('vol-slider');
+
+let money = 100, victimCost = 100, currentTab = 'gang', hue = 0, adminClicks = 0;
+let myHeroes = [], heroesOnMap = [], isSpinning = false, totalRotation = 0;
+let playerColor = '#e94560', mySkins = ['#e94560'];
+const player = { x: 0, y: 0, r: 20, speed: 6 };
+const joy = { active: false, startX: 0, startY: 0, curX: 0, curY: 0 };
+
+function adminClick() {
+    adminClicks++;
+    if(adminClicks >= 5) {
+        if(prompt("Код?") === "777") document.getElementById('admin-panel').style.display = 'flex';
+        adminClicks = 0;
+    }
+}
+function setAdminMoney() {
+    const val = document.getElementById('adm-money').value;
+    if(val) money = parseFloat(val);
+}
+
+// --- AUDIO ---
+let audioCtx, musicGain, isMusicPlaying = false, musicStep = 0;
+const melody = [261.6, 329.6, 392.0, 349.2, 261.6, 329.6, 440.0, 392.0];
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        musicGain = audioCtx.createGain();
+        musicGain.connect(audioCtx.destination);
+        musicGain.gain.value = volSlider.value;
+        setInterval(() => {
+            if (isMusicPlaying && audioCtx) {
+                const osc = audioCtx.createOscillator(); const g = audioCtx.createGain();
+                osc.type = 'square'; osc.frequency.setValueAtTime(melody[musicStep % 8], audioCtx.currentTime);
+                g.gain.setValueAtTime(musicGain.gain.value * 0.4, audioCtx.currentTime);
+                g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.15);
+                osc.connect(g); g.connect(musicGain); osc.start(); osc.stop(audioCtx.currentTime + 0.15); musicStep++;
+            }
+        }, 200);
+    }
+}
+
+volSlider.oninput = () => { if(musicGain) musicGain.gain.value = volSlider.value; };
+
+function toggleMusic() { 
+    initAudio(); isMusicPlaying = !isMusicPlaying; 
+    document.getElementById('music-ctrl').innerText = isMusicPlaying ? "МУЗЫКА: ВКЛ" : "МУЗЫКА: ВЫКЛ"; 
+}
+
+function playScream(isRainbow) {
+    if (!audioCtx) return;
+    const osc = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    osc.type = 'square'; osc.frequency.setValueAtTime(isRainbow ? 1000 : 500, audioCtx.currentTime);
+    g.gain.value = volSlider.value * 0.6; osc.connect(g); g.connect(audioCtx.destination);
+    osc.start(); osc.stop(audioCtx.currentTime + 0.2);
+}
+
+// --- LOGIC ---
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; player.x = canvas.width/2; player.y = canvas.height/2; }
+window.addEventListener('resize', resize); resize();
+
+function createVictim(isRainbow) {
+    heroesOnMap.push({
+        x: 50+Math.random()*(canvas.width-100), y: 50+Math.random()*(canvas.height-150),
+        income: isRainbow?1000:12, lv:1, rainbow: isRainbow, runSpeed: isRainbow?5:3.5, baseCost: isRainbow?15000:150
+    });
+}
+function buyVictim() { if(money>=victimCost){ money-=victimCost; createVictim(Math.random()<0.05); victimCost+=50; document.getElementById('victim-cost').innerText=victimCost; } }
+
+function switchTab(t) {
+    currentTab = t;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + t).classList.add('active');
+    renderCurrentTab();
+}
+function toggleMenu() { const m = document.getElementById('menu-panel'); m.style.display=(m.style.display==='flex')?'none':'flex'; if(m.style.display==='flex') renderCurrentTab(); }
+
+function renderCurrentTab() {
+    tabContent.innerHTML = '';
+    if (currentTab === 'gang') {
+        myHeroes.forEach((h, i) => {
+            let cost = Math.floor(h.baseCost * Math.pow(1.6, h.lv - 1));
+            tabContent.innerHTML += `<div class="card"><b class="${h.rainbow?'rainbow-text':''}">${h.name} [Lvl ${h.lv}]</b><br>+${h.income*h.lv}$/с<br><button class="btn" onclick="upgradeHero(${i})">UP: ${cost}$</button></div>`;
+        });
+    } else if (currentTab === 'skins') {
+        [ {n:"КЛАССИК", c:"#e94560"}, {n:"ИЗУМРУД", c:"#2ecc71"}, {n:"НЕОН", c:"#00f2ff"}, {n:"ЗОЛОТО", c:"#f1c40f"} ].forEach(s => {
+            const owned = mySkins.includes(s.c);
+            tabContent.innerHTML += `<div class="card"><div style="width:15px;height:15px;background:${s.c};display:inline-block"></div> ${s.n}<br><button class="btn" onclick="${owned?`playerColor='${s.c}';renderCurrentTab()`:`if(money>=5000){money-=5000;mySkins.push('${s.c}');playerColor='${s.c}';renderCurrentTab()}`}">${owned?'НАДЕТЬ':'КУПИТЬ 5к'}</button></div>`;
+        });
+    } else if (currentTab === 'wheel') {
+        tabContent.innerHTML = `<div id="wheel-container"><div id="wheel-arrow"></div><canvas id="wheel-canvas" width="400" height="400"></canvas></div><button class="btn" style="background:#f1c40f" onclick="spinWheel()">КРУТИТЬ (15000$)</button>`;
+        setTimeout(drawWheel, 10);
+    } else if (currentTab === 'chests') {
+        tabContent.innerHTML = `<div class="card">ЛЕГЕНДАРНЫЙ СУНДУК<button class="btn" onclick="openChest()">ОТКРЫТЬ (60000$)</button></div>`;
+    }
+}
+
+function openChest() {
+    if (money >= 60000) {
+        money -= 60000;
+        if(Math.random() < 0.15) { myHeroes.push({ name: "РАДУЖНЫЙ", income: 1000, baseCost: 15000, lv: 1, rainbow: true, runSpeed: 5 }); alert("РАДУГА!"); }
+        else { myHeroes.push({ name: "ЖЕРТВА", income: 20, baseCost: 200, lv: 1, rainbow: false, runSpeed: 3.5 }); alert("Обычный герой"); }
+        renderCurrentTab();
+    }
+}
+
+const wheelPrizes = [5000, 10000, 20000, 50000, 100000, "РАДУГА"];
+function drawWheel() {
+    const wCanvas = document.getElementById('wheel-canvas'); if (!wCanvas) return;
+    const wCtx = wCanvas.getContext('2d'); const arc = Math.PI * 2 / 6;
+    for(let i=0; i<6; i++) {
+        wCtx.fillStyle = (i === 5) ? `hsl(${hue}, 80%, 50%)` : (i % 2 ? '#e94560' : '#1a1a2e');
+        wCtx.beginPath(); wCtx.moveTo(200, 200); wCtx.arc(200, 200, 200, i*arc, (i+1)*arc); wCtx.fill();
+        wCtx.save(); wCtx.translate(200, 200); wCtx.rotate(i*arc + arc/2);
+        wCtx.fillStyle = "white"; wCtx.font = "bold 22px Arial"; wCtx.fillText(wheelPrizes[i].toString().replace("РАДУГА", "R"), 90, 10); wCtx.restore();
+    }
+}
+function spinWheel() {
+    if (isSpinning || money < 15000) return;
+    money -= 15000; isSpinning = true;
+    const winIdx = (Math.random() < 0.01) ? 5 : Math.floor(Math.random() * 5);
+    totalRotation += 3600 + (5 - winIdx) * 60 + 30;
+    document.getElementById('wheel-canvas').style.transform = `rotate(${totalRotation}deg)`;
+    setTimeout(() => {
+        isSpinning = false;
+        if(winIdx === 5) { myHeroes.push({ name: "РАДУЖНЫЙ", income: 1000, baseCost: 15000, lv: 1, rainbow: true, runSpeed: 5 }); playScream(true); alert("РАДУЖНАЯ ЖЕРТВА!"); }
+        else { money += wheelPrizes[winIdx]; alert(`Приз: ${wheelPrizes[winIdx]}$`); }
+        renderCurrentTab();
+    }, 4000);
+}
+
+window.upgradeHero = (i) => { let h = myHeroes[i]; let cost = Math.floor(h.baseCost * Math.pow(1.6, h.lv - 1)); if (money >= cost) { money -= cost; h.lv++; renderCurrentTab(); } };
+
+// --- УПРАВЛЕНИЕ ---
+canvas.addEventListener('touchstart', e => { 
+    initAudio(); 
+    const touch = e.touches[0];
+    joy.active = true; 
+    joy.startX = touch.clientX; joy.startY = touch.clientY; 
+    joy.curX = touch.clientX; joy.curY = touch.clientY; 
+}, {passive: false});
+
+canvas.addEventListener('touchmove', e => { 
+    if(joy.active) { 
+        const touch = e.touches[0];
+        joy.curX = touch.clientX; joy.curY = touch.clientY; 
+    }
+}, {passive: false});
+
+window.addEventListener('touchend', () => joy.active = false);
+
+function loop() {
+    hue = (hue + 5) % 360;
+    ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    if (joy.active) {
+        const dx = joy.curX - joy.startX, dy = joy.curY - joy.startY, dist = Math.hypot(dx, dy);
+        if (dist > 5) { 
+            const ang = Math.atan2(dy, dx); 
+            player.x += Math.cos(ang) * player.speed; 
+            player.y += Math.sin(ang) * player.speed; 
+        }
+        player.x = Math.max(player.r, Math.min(canvas.width - player.r, player.x));
+        player.y = Math.max(player.r, Math.min(canvas.height - player.r, player.y));
+        
+        // Рисуем джойстик
+        ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(joy.startX, joy.startY, 50, 0, Math.PI*2); ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.1)";
+        ctx.beginPath(); ctx.arc(joy.curX, joy.curY, 25, 0, Math.PI*2); ctx.fill();
+    }
+    
+    for (let i = heroesOnMap.length - 1; i >= 0; i--) {
+        const h = heroesOnMap[i]; const d = Math.hypot(player.x - h.x, player.y - h.y);
+        if (d < 200) { const ang = Math.atan2(h.y - player.y, h.x - player.x); h.x += Math.cos(ang) * h.runSpeed; h.y += Math.sin(ang) * h.runSpeed; h.x = Math.max(15, Math.min(canvas.width - 15, h.x)); h.y = Math.max(15, Math.min(canvas.height - 15, h.y)); }
+        ctx.fillStyle = h.rainbow ? `hsl(${hue}, 100%, 50%)` : '#4ecca3';
+        ctx.beginPath(); ctx.arc(h.x, h.y, 15, 0, Math.PI*2); ctx.fill();
+        if (d < 35) { playScream(h.rainbow); myHeroes.push({...h}); heroesOnMap.splice(i, 1); }
+    }
+    
+    ctx.fillStyle = playerColor; ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 3; ctx.stroke();
+    
+    let inc = 0; myHeroes.forEach(h => inc += h.income * h.lv); money += inc / 60;
+    document.getElementById('money').innerText = Math.floor(money) + " $";
+    document.getElementById('pps').innerText = Math.floor(inc);
+    if (currentTab === 'wheel') drawWheel();
+    requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
